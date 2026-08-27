@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>鳥取西部 SURF FORECAST</title>
+<style>
+:root{--bg:#08151b;--panel:#0f222b;--panel2:#132b35;--text:#eef7f8;--muted:#8ea8b0;--line:#21404b;--accent:#64d8cb}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans JP",sans-serif;background:#08151b;color:var(--text)}
+.wrap{max-width:1180px;margin:auto;padding:10px}
+header{position:sticky;top:0;z-index:5;background:rgba(8,21,27,.96);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.header-inner{max-width:1180px;margin:auto;padding:10px}
+h1{font-size:20px;margin:0}
+.controls{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+button,select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+button.active{border-color:var(--accent)}
+.overview{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;cursor:pointer;min-height:138px}
+.card:hover{border-color:var(--accent)}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.name{font-weight:700;font-size:16px}
+.coast{font-size:11px;color:var(--muted);margin-top:2px}
+.grade{font-size:34px;line-height:1;font-weight:800}
+.grade.good{color:#83e6bf}.grade.mid{color:#f3d58b}.grade.bad{color:#ef9a9a}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:10px}
+.mini{background:var(--panel2);border-radius:8px;padding:7px}
+.mini .k{font-size:10px;color:var(--muted)}
+.mini .v{font-size:14px;font-weight:700;margin-top:2px}
+.status{font-size:11px;color:var(--muted);margin-top:7px}
+.detail{display:none;margin-top:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
+.detail.open{display:block}
+.detail-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.table-wrap{overflow:auto;margin-top:8px}
+table{border-collapse:collapse;width:100%;min-width:760px}
+th,td{padding:8px;text-align:center;border-bottom:1px solid var(--line);font-size:12px}
+th{color:#abc1c7;background:#10262f}
+.notice{font-size:11px;color:#d7c99c;margin-top:8px}
+@media(max-width:700px){
+  .overview{grid-template-columns:repeat(2,1fr)}
+  .card{min-height:128px}
+  .metrics{grid-template-columns:1fr}
+  .mini{display:flex;justify-content:space-between}
+}
+@media(max-width:430px){
+  .wrap,.header-inner{padding:7px}
+  h1{font-size:17px}
+  .overview{gap:6px}
+  .card{padding:8px;min-height:118px}
+  .grade{font-size:30px}
+  .name{font-size:14px}
+  .coast{font-size:10px}
+}
+</style>
+</head>
+<body>
+<header>
+<div class="header-inner">
+  <h1>鳥取西部 SURF FORECAST</h1>
+  <div class="controls">
+    <button id="todayBtn" class="active">今日</button>
+    <button id="tomorrowBtn">明日</button>
+    <button id="nextBtn">明後日</button>
+    <select id="timeSelect"></select>
+    <button id="reload">更新</button>
+  </div>
+</div>
+</header>
+
+<main class="wrap">
+  <section class="overview" id="overview"></section>
+  <section class="detail" id="detail"></section>
+
+
+</main>
+
+<script>
+const POINTS=[
+{id:'yodoe',name:'淀江',coast:'北〜北北西',lat:35.46,lon:133.42},
+{id:'hirata',name:'平田',coast:'北',lat:35.48,lon:133.43},
+{id:'nawakawa',name:'名和川',coast:'北〜北北東',lat:35.50,lon:133.48},
+{id:'daikoku',name:'大黒',coast:'北',lat:35.51,lon:133.63},
+{id:'tohaku',name:'東伯',coast:'北',lat:35.50,lon:133.71},
+{id:'ishiwaki',name:'石脇',coast:'北〜北北西',lat:35.51,lon:133.95}
+];
+let dayOffset=0;
+let cache={};
+const $=s=>document.querySelector(s);
+
+function fmtDir(d){
+ if(d==null)return'—';
+ const dirs=['北','北北東','北東','東北東','東','東南東','南東','南南東','南','南南西','南西','西南西','西','西北西','北西','北北西'];
+ return dirs[Math.round(d/22.5)%16];
+}
+function ms(kmh){return kmh==null?null:kmh/3.6}
+function score(wave,period,wind){
+ if(wave==null||period==null||wind==null)return['—',''];
+ const x=(wave>=0.4?1:0)+(period>=7?1:0)+(wind<=4?1:0);
+ const excellent=wave>=0.6&&period>=9&&wind<=3;
+ if(excellent)return['◎','good'];
+ if(x>=3)return['○','good'];
+ if(x===2)return['△','mid'];
+ return['×','bad'];
+}
+function dateKey(){
+ const d=new Date();d.setDate(d.getDate()+dayOffset);
+ return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
+}
+function buildTimes(){
+ const sel=$('#timeSelect'); sel.innerHTML='';
+ for(let h=5;h<=20;h++){
+   const o=document.createElement('option');
+   o.value=String(h).padStart(2,'0')+':00';o.textContent=o.value;sel.appendChild(o);
+ }
+ const now=new Date().getHours();
+ sel.value=(Math.min(20,Math.max(5,now))).toString().padStart(2,'0')+':00';
+}
+async function fetchPoint(p){
+ const c={lat:p.lat,lon:p.lon};
+ const tz='Asia%2FTokyo';
+ const marine=`https://marine-api.open-meteo.com/v1/marine?latitude=${c.lat}&longitude=${c.lon}&hourly=wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period&forecast_days=4&timezone=${tz}`;
+ const weather=`https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=kmh&forecast_days=4&timezone=${tz}`;
+ const [mr,wr]=await Promise.all([fetch(marine),fetch(weather)]);
+ if(!mr.ok||!wr.ok)throw new Error();
+ const [m,w]=await Promise.all([mr.json(),wr.json()]);
+ return {m,w};
+}
+function extractAt(data,time){
+ if(!data)return null;
+ const key=dateKey()+'T'+time;
+ const i=data.m.hourly.time.indexOf(key);
+ const wi=data.w.hourly.time.indexOf(key);
+ if(i<0)return null;
+ return {
+   wave:data.m.hourly.wave_height[i],
+   waveDir:data.m.hourly.wave_direction[i],
+   period:data.m.hourly.wave_period[i],
+   swell:data.m.hourly.swell_wave_height[i],
+   swellDir:data.m.hourly.swell_wave_direction[i],
+   swellPeriod:data.m.hourly.swell_wave_period[i],
+   wind:wi>=0?ms(data.w.hourly.wind_speed_10m[wi]):null,
+   windDir:wi>=0?data.w.hourly.wind_direction_10m[wi]:null
+ };
+}
+function renderOverview(){
+ const time=$('#timeSelect').value;
+ $('#overview').innerHTML=POINTS.map(p=>{
+   const r=extractAt(cache[p.id],time);
+   if(!r){
+     return `<div class="card" onclick="showDetail('${p.id}')">
+       <div class="top"><div><div class="name">${p.name}</div><div class="coast">海岸向き ${p.coast}</div></div><div class="grade">—</div></div>
+       <div class="status">データなし</div>
+     </div>`;
+   }
+   const [g,cl]=score(r.wave,r.period,r.wind);
+   return `<div class="card" onclick="showDetail('${p.id}')">
+     <div class="top"><div><div class="name">${p.name}</div><div class="coast">海岸向き ${p.coast}</div></div><div class="grade ${cl}">${g}</div></div>
+     <div class="metrics">
+       <div class="mini"><div class="k">波高</div><div class="v">${r.wave?.toFixed(1)??'—'}m</div></div>
+       <div class="mini"><div class="k">周期</div><div class="v">${r.period?.toFixed(1)??'—'}s</div></div>
+       <div class="mini"><div class="k">風</div><div class="v">${r.wind?.toFixed(1)??'—'}m/s</div></div>
+     </div>
+   </div>`;
+ }).join('');
+}
+function showDetail(id){
+ const p=POINTS.find(x=>x.id===id),data=cache[id],d=$('#detail');
+ if(!data){
+   d.className='detail open';
+   d.innerHTML=`<div class="detail-head"><b>${p.name} 詳細</b><button onclick="closeDetail()">閉じる</button></div><div class="notice">座標未設定またはデータ取得不可です。</div>`;
+   d.scrollIntoView({behavior:'smooth',block:'start'});return;
+ }
+ const key=dateKey();
+ const rows=[];
+ data.m.hourly.time.forEach((t,i)=>{
+   if(!t.startsWith(key))return;
+   const wi=data.w.hourly.time.indexOf(t);
+   rows.push({
+    time:t.slice(11,16),wave:data.m.hourly.wave_height[i],waveDir:data.m.hourly.wave_direction[i],
+    period:data.m.hourly.wave_period[i],swell:data.m.hourly.swell_wave_height[i],
+    swellDir:data.m.hourly.swell_wave_direction[i],swellPeriod:data.m.hourly.swell_wave_period[i],
+    wind:wi>=0?ms(data.w.hourly.wind_speed_10m[wi]):null,windDir:wi>=0?data.w.hourly.wind_direction_10m[wi]:null
+   });
+ });
+ d.className='detail open';
+ d.innerHTML=`<div class="detail-head"><div><b>${p.name} 詳細</b><div class="coast">海岸向き ${p.coast}</div></div><button onclick="closeDetail()">閉じる</button></div>
+ <div class="table-wrap"><table><thead><tr><th>時間</th><th>評価</th><th>波高</th><th>波向</th><th>周期</th><th>うねり</th><th>うねり向</th><th>うねり周期</th><th>風</th><th>風向</th></tr></thead>
+ <tbody>${rows.map(r=>{const [g,cl]=score(r.wave,r.period,r.wind);return `<tr><td>${r.time}</td><td class="${cl}">${g}</td><td>${r.wave?.toFixed(1)??'—'}m</td><td>${fmtDir(r.waveDir)}</td><td>${r.period?.toFixed(1)??'—'}s</td><td>${r.swell?.toFixed(1)??'—'}m</td><td>${fmtDir(r.swellDir)}</td><td>${r.swellPeriod?.toFixed(1)??'—'}s</td><td>${r.wind?.toFixed(1)??'—'}m/s</td><td>${fmtDir(r.windDir)}</td></tr>`}).join('')}</tbody></table></div>`;
+ d.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function closeDetail(){const d=$('#detail');d.className='detail';d.innerHTML=''}
+async function loadAll(){
+ $('#overview').innerHTML=POINTS.map(p=>`<div class="card"><div class="name">${p.name}</div><div class="status">取得中...</div></div>`).join('');
+ await Promise.all(POINTS.map(async p=>{try{cache[p.id]=await fetchPoint(p)}catch(e){cache[p.id]=null}}));
+ renderOverview();
+}
+function setDay(n){
+ dayOffset=n;
+ ['todayBtn','tomorrowBtn','nextBtn'].forEach((id,i)=>$('#'+id).classList.toggle('active',i===n));
+ closeDetail();renderOverview();
+}
+$('#todayBtn').onclick=()=>setDay(0);
+$('#tomorrowBtn').onclick=()=>setDay(1);
+$('#nextBtn').onclick=()=>setDay(2);
+$('#timeSelect').onchange=()=>{closeDetail();renderOverview()};
+$('#reload').onclick=loadAll;
+
+buildTimes();loadAll();
+</script>
+</body>
+</html>
