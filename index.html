@@ -36,6 +36,7 @@ table{border-collapse:collapse;width:100%;min-width:760px}
 th,td{padding:8px;text-align:center;border-bottom:1px solid var(--line);font-size:12px}
 th{color:#abc1c7;background:#10262f}
 .notice{font-size:11px;color:#d7c99c;margin-top:8px}
+.reference{margin-top:10px;font-size:12px;line-height:1.7;border-top:1px solid var(--line);padding-top:8px}.reference a, .notice a{color:var(--accent)}
 @media(max-width:700px){
   .overview{grid-template-columns:repeat(2,1fr)}
   .card{min-height:128px}
@@ -68,6 +69,7 @@ th{color:#abc1c7;background:#10262f}
 </header>
 
 <main class="wrap">
+  <p class="notice">あなたの目安：波高1m以上・周期7秒以上。○＝両予報が条件達成、△＝予報不一致／風の確認が必要、×＝両予報が条件未達、参考＝外部照合なし。入水可否の判定ではありません。<br>予報：<a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>（DWD等）＋<a href="https://www.surf-life.blue/" target="_blank" rel="noopener">Surf life</a>。外部予報は6時間ごとに取得、12時間を超えるデータは照合から除外。</p>
   <section class="overview" id="overview"></section>
   <section class="detail" id="detail"></section>
 
@@ -85,6 +87,8 @@ const POINTS=[
 ];
 let dayOffset=0;
 let cache={};
+let reference={points:{}};
+const referenceIds={yodoe:395,nawakawa:393,daikoku:390,ishiwaki:387};
 const $=s=>document.querySelector(s);
 
 function fmtDir(d){
@@ -94,17 +98,34 @@ function fmtDir(d){
 }
 function ms(kmh){return kmh==null?null:kmh/3.6}
 function score(wave,period,wind){
- if(wave==null||period==null||wind==null)return['—',''];
- const x=(wave>=0.4?1:0)+(period>=7?1:0)+(wind<=4?1:0);
- const excellent=wave>=0.6&&period>=9&&wind<=3;
- if(excellent)return['◎','good'];
- if(x>=3)return['○','good'];
- if(x===2)return['△','mid'];
- return['×','bad'];
+ if(!Number.isFinite(wave)||!Number.isFinite(period))return['—',''];
+ return wave>=1&&period>=7?['○','good']:['×','bad'];
+}
+function externalAt(id,time){
+ const p=reference.points?.[id],age=Date.now()-Date.parse(p?.fetchedAt);
+ if(!Number.isFinite(age)||age<0||age>12*3600000)return null;
+ const r=p.rows?.find(x=>x.time===dateKey()+'T'+time);
+ return r&&[r.wave,r.period,r.wind].every(Number.isFinite)?r:null;
+}
+function assessment(id,time,r){
+ const ext=externalAt(id,time),a=score(r?.wave,r?.period)[0],b=score(ext?.wave,ext?.period)[0];
+ if(!ext)return ['参考','mid',a==='—'?'予報値が不足':`Open-Meteoのみ：${a==='○'?'1m・7秒を達成':'1m・7秒の条件未達'}`];
+ if(a==='—')return ['参考','mid',`Surf lifeのみ：${b==='○'?'1m・7秒を達成':'1m・7秒の条件未達'}`];
+ if(a!==b)return ['△','mid','予報不一致：1m・7秒の達成判断が分かれています'];
+ if(a==='×')return ['×','bad','両予報とも波高1m・周期7秒の条件未達'];
+ if(!Number.isFinite(r.wind)||Math.max(r.wind,ext.wind)>4)return ['△','mid','波条件は両予報で達成。風速4m/s超または風データ不足：現地確認'];
+ return ['○','good','両予報で波条件達成・風速4m/s以下'];
+}
+function referenceHtml(id,time,r){
+ const ext=externalAt(id,time),entry=reference.points?.[id];
+ const a=assessment(id,time,r);const sid=referenceIds[id];
+ const url=sid?`https://www.surf-life.blue/surf/spots/%E9%B3%A5%E5%8F%96%E7%9C%8C/${sid}/`:null;
+ const windTypes=['オフショア','サイドオフ','サイド','サイドオン','オンショア'];
+ const windType=ext&&windTypes.includes(ext.windType)?ext.windType:'風区分不明';
+ return `<div class="reference">${a[2]}<br>${ext?`Surf life：${ext.wave.toFixed(1)}m / ${ext.period.toFixed(1)}秒・風${ext.wind.toFixed(1)}m/s（${windType}）<br>取得：${new Date(entry.fetchedAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})} JST`:(sid?'外部予報は未取得・期限切れ・対象時刻なし':'対応する外部地点が未確認')}<br>${url?`<a href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">元の波情報を確認</a>`:''}</div>`;
 }
 function dateKey(){
- const d=new Date();d.setDate(d.getDate()+dayOffset);
- return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
+ return new Date(Date.now()+9*3600000+dayOffset*86400000).toISOString().slice(0,10);
 }
 function buildTimes(){
  const sel=$('#timeSelect'); sel.innerHTML='';
@@ -112,7 +133,7 @@ function buildTimes(){
    const o=document.createElement('option');
    o.value=String(h).padStart(2,'0')+':00';o.textContent=o.value;sel.appendChild(o);
  }
- const now=new Date().getHours();
+ const now=new Date(Date.now()+9*3600000).getUTCHours();
  sel.value=(Math.min(20,Math.max(5,now))).toString().padStart(2,'0')+':00';
 }
 async function fetchPoint(p){
@@ -120,7 +141,7 @@ async function fetchPoint(p){
  const tz='Asia%2FTokyo';
  const marine=`https://marine-api.open-meteo.com/v1/marine?latitude=${c.lat}&longitude=${c.lon}&hourly=wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period&forecast_days=4&timezone=${tz}`;
  const weather=`https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=kmh&forecast_days=4&timezone=${tz}`;
- const [mr,wr]=await Promise.all([fetch(marine),fetch(weather)]);
+ const [mr,wr]=await Promise.all([fetch(marine,{signal:AbortSignal.timeout(20000)}),fetch(weather,{signal:AbortSignal.timeout(20000)})]);
  if(!mr.ok||!wr.ok)throw new Error();
  const [m,w]=await Promise.all([mr.json(),wr.json()]);
  return {m,w};
@@ -149,10 +170,10 @@ function renderOverview(){
    if(!r){
      return `<div class="card" onclick="showDetail('${p.id}')">
        <div class="top"><div><div class="name">${p.name}</div><div class="coast">海岸向き ${p.coast}</div></div><div class="grade">—</div></div>
-       <div class="status">データなし</div>
+       <div class="status">Open-Meteoデータなし</div>${referenceHtml(p.id,time,null)}
      </div>`;
    }
-   const [g,cl]=score(r.wave,r.period,r.wind);
+   const [g,cl]=assessment(p.id,time,r);
    return `<div class="card" onclick="showDetail('${p.id}')">
      <div class="top"><div><div class="name">${p.name}</div><div class="coast">海岸向き ${p.coast}</div></div><div class="grade ${cl}">${g}</div></div>
      <div class="metrics">
@@ -160,6 +181,7 @@ function renderOverview(){
        <div class="mini"><div class="k">周期</div><div class="v">${r.period?.toFixed(1)??'—'}s</div></div>
        <div class="mini"><div class="k">風</div><div class="v">${r.wind?.toFixed(1)??'—'}m/s</div></div>
      </div>
+     ${referenceHtml(p.id,time,r)}
    </div>`;
  }).join('');
 }
@@ -185,13 +207,16 @@ function showDetail(id){
  d.className='detail open';
  d.innerHTML=`<div class="detail-head"><div><b>${p.name} 詳細</b><div class="coast">海岸向き ${p.coast}</div></div><button onclick="closeDetail()">閉じる</button></div>
  <div class="table-wrap"><table><thead><tr><th>時間</th><th>評価</th><th>波高</th><th>波向</th><th>周期</th><th>うねり</th><th>うねり向</th><th>うねり周期</th><th>風</th><th>風向</th></tr></thead>
- <tbody>${rows.map(r=>{const [g,cl]=score(r.wave,r.period,r.wind);return `<tr><td>${r.time}</td><td class="${cl}">${g}</td><td>${r.wave?.toFixed(1)??'—'}m</td><td>${fmtDir(r.waveDir)}</td><td>${r.period?.toFixed(1)??'—'}s</td><td>${r.swell?.toFixed(1)??'—'}m</td><td>${fmtDir(r.swellDir)}</td><td>${r.swellPeriod?.toFixed(1)??'—'}s</td><td>${r.wind?.toFixed(1)??'—'}m/s</td><td>${fmtDir(r.windDir)}</td></tr>`}).join('')}</tbody></table></div>`;
+ <tbody>${rows.map(r=>{const [g,cl]=assessment(id,r.time,r);return `<tr><td>${r.time}</td><td class="${cl}">${g}${referenceHtml(id,r.time,r)}</td><td>${r.wave?.toFixed(1)??'—'}m</td><td>${fmtDir(r.waveDir)}</td><td>${r.period?.toFixed(1)??'—'}s</td><td>${r.swell?.toFixed(1)??'—'}m</td><td>${fmtDir(r.swellDir)}</td><td>${r.swellPeriod?.toFixed(1)??'—'}s</td><td>${r.wind?.toFixed(1)??'—'}m/s</td><td>${fmtDir(r.windDir)}</td></tr>`}).join('')}</tbody></table></div>`;
  d.scrollIntoView({behavior:'smooth',block:'start'});
 }
 function closeDetail(){const d=$('#detail');d.className='detail';d.innerHTML=''}
 async function loadAll(){
  $('#overview').innerHTML=POINTS.map(p=>`<div class="card"><div class="name">${p.name}</div><div class="status">取得中...</div></div>`).join('');
- await Promise.all(POINTS.map(async p=>{try{cache[p.id]=await fetchPoint(p)}catch(e){cache[p.id]=null}}));
+ await Promise.all([
+  fetch('./data/surf-reference.json',{cache:'no-store',signal:AbortSignal.timeout(15000)}).then(r=>{if(!r.ok)throw Error();return r.json()}).then(d=>{reference=d.version===1?d:{points:{}}}).catch(()=>{reference={points:{}}}),
+  ...POINTS.map(async p=>{try{cache[p.id]=await fetchPoint(p)}catch(e){cache[p.id]=null}})
+ ]);
  renderOverview();
 }
 function setDay(n){
